@@ -1,0 +1,777 @@
+-- Lua скрипт для Roblox инжектора (LocalScript)
+-- Улучшенная версия: Toggle кнопки "Invisible", "Noclip", "Full ESP", "Shoot Murderer (on-click)" и "Auto Farm Coins" с красивым дизайном
+-- ИСПРАВЛЕНО: Персонаж НЕ становится прозрачным при загрузке скрипта (isInvisible = false, и toggle не срабатывает автоматически)
+-- Shoot Murderer: При клике на кнопку мгновенно стреляет в Murderer (поворачивается и активирует Gun, если есть)
+-- Auto Farm Coins: Автоматически идёт к ближайшему CoinContainer (в папках workspace, GetDescendants)
+-- Кнопка закрытия и перетаскивание фрейма сохранены
+
+local Players = game:GetService("Players")
+local TweenService = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+
+local player = Players.LocalPlayer
+local playerGui = player:WaitForChild("PlayerGui")
+
+-- Переменные для отслеживания состояний (Invisible = false по умолчанию, не прозрачный при загрузке)
+local isInvisible = false
+local isNoclip = false
+local isEspFull = false
+local isAutoFarm = false
+local noclipConnection = nil
+local espConnection = nil
+local autoFarmConnection = nil
+local espHighlights = {}
+
+-- Проверка на MM2 (PlaceId = 142823291)
+local isMM2 = game.PlaceId == 142823291
+
+-- Создаем ScreenGui
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "InvisibleGui"
+screenGui.ResetOnSpawn = false
+screenGui.Parent = playerGui
+
+-- Основной Frame (расширен для пяти кнопок)
+local mainFrame = Instance.new("Frame")
+mainFrame.Size = UDim2.new(0, 220, 0, 240)
+mainFrame.Position = UDim2.new(0, 20, 0, 20)
+mainFrame.BackgroundColor3 = Color3.new(0.1, 0.1, 0.1)
+mainFrame.BorderSizePixel = 0
+mainFrame.Active = true
+mainFrame.Draggable = true
+mainFrame.Parent = screenGui
+
+-- Скругленные углы для Frame
+local mainCorner = Instance.new("UICorner")
+mainCorner.CornerRadius = UDim.new(0, 12)
+mainCorner.Parent = mainFrame
+
+-- Градиентный фон для Frame
+local gradient = Instance.new("UIGradient")
+gradient.Color = ColorSequence.new{
+    ColorSequenceKeypoint.new(0, Color3.new(0.15, 0.15, 0.15)),
+    ColorSequenceKeypoint.new(1, Color3.new(0.05, 0.05, 0.05))
+}
+gradient.Rotation = 45
+gradient.Parent = mainFrame
+
+-- Тень
+local shadow = Instance.new("ImageLabel")
+shadow.Size = UDim2.new(1, 4, 1, 4)
+shadow.Position = UDim2.new(0, -2, 0, -2)
+shadow.BackgroundTransparency = 1
+shadow.Image = "rbxasset://textures/ui/GuiImagePlaceholder.png"
+shadow.ImageTransparency = 0.7
+shadow.ImageColor3 = Color3.new(0, 0, 0)
+shadow.Parent = mainFrame
+
+-- Кнопка закрытия (X)
+local closeButton = Instance.new("TextButton")
+closeButton.Size = UDim2.new(0, 20, 0, 20)
+closeButton.Position = UDim2.new(1, -25, 0, 5)
+closeButton.BackgroundColor3 = Color3.new(0.8, 0.2, 0.2)
+closeButton.BorderSizePixel = 0
+closeButton.Text = "✕"
+closeButton.TextColor3 = Color3.new(1, 1, 1)
+closeButton.TextScaled = true
+closeButton.Font = Enum.Font.GothamBold
+closeButton.Parent = mainFrame
+
+local closeCorner = Instance.new("UICorner")
+closeCorner.CornerRadius = UDim.new(0, 4)
+closeCorner.Parent = closeButton
+
+local closeGradient = Instance.new("UIGradient")
+closeGradient.Color = ColorSequence.new{
+    ColorSequenceKeypoint.new(0, Color3.new(0.9, 0.3, 0.3)),
+    ColorSequenceKeypoint.new(1, Color3.new(0.7, 0.1, 0.1))
+}
+closeGradient.Rotation = 90
+closeGradient.Parent = closeButton
+
+-- Анимация для closeButton
+local function animateCloseButton(action)
+    local tweenInfo = TweenInfo.new(0.1, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+    if action == "hover" then
+        TweenService:Create(closeButton, tweenInfo, {Size = UDim2.new(0, 24, 0, 24)}):Play()
+    elseif action == "unhover" then
+        TweenService:Create(closeButton, tweenInfo, {Size = UDim2.new(0, 20, 0, 20)}):Play()
+    elseif action == "click" then
+        TweenService:Create(closeButton, TweenInfo.new(0.05, Enum.EasingStyle.Back, Enum.EasingDirection.InOut), {Size = UDim2.new(0, 16, 0, 16)}):Play()
+        wait(0.05)
+        TweenService:Create(closeButton, TweenInfo.new(0.05, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {Size = UDim2.new(0, 20, 0, 20)}):Play()
+    end
+end
+
+closeButton.MouseEnter:Connect(function() animateCloseButton("hover") end)
+closeButton.MouseLeave:Connect(function() animateCloseButton("unhover") end)
+
+closeButton.MouseButton1Click:Connect(function()
+    if noclipConnection then noclipConnection:Disconnect() end
+    if espConnection then espConnection:Disconnect() end
+    if autoFarmConnection then autoFarmConnection:Disconnect() end
+    for _, highlight in pairs(espHighlights) do if highlight then highlight:Destroy() end end
+    espHighlights = {}
+    animateCloseButton("click")
+    screenGui:Destroy()
+end)
+
+-- Drag
+local dragging = false
+local dragStart = nil
+local startPos = nil
+
+local function updateInput(input)
+    local delta = input.Position - dragStart
+    mainFrame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+end
+
+mainFrame.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        dragging = true
+        dragStart = input.Position
+        startPos = mainFrame.Position
+        input.Changed:Connect(function()
+            if input.UserInputType == Enum.UserInputType.MouseMovement then
+                updateInput(input)
+            end
+        end)
+    end
+end)
+
+mainFrame.InputChanged:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseMovement then
+        dragStart = input.Position
+        startPos = mainFrame.Position
+    end
+end)
+
+UserInputService.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        dragging = false
+    end
+end)
+
+-- Функция поиска Murderer
+local function findMurderer()
+    for _, p in pairs(Players:GetPlayers()) do
+        if p ~= player and (p.Backpack:FindFirstChild("Knife") or p.Character and p.Character:FindFirstChild("Knife")) then
+            return p
+        end
+    end
+    return nil
+end
+
+-- Функция для Invisible (сохранена, без авто-применения)
+local function createInvisibleButton()
+    local button = Instance.new("TextButton")
+    button.Size = UDim2.new(1, -40, 0, 25)
+    button.Position = UDim2.new(0, 10, 0, 5)
+    button.BackgroundColor3 = Color3.new(0.2, 0.4, 0.8)
+    button.BorderSizePixel = 0
+    button.Text = "👁️ Invisible (OFF)"
+    button.TextColor3 = Color3.new(1, 1, 1)
+    button.TextScaled = true
+    button.Font = Enum.Font.GothamBold
+    button.Parent = mainFrame
+
+    local buttonCorner = Instance.new("UICorner")
+    buttonCorner.CornerRadius = UDim.new(0, 8)
+    buttonCorner.Parent = button
+
+    local buttonGradient = Instance.new("UIGradient")
+    buttonGradient.Color = ColorSequence.new{
+        ColorSequenceKeypoint.new(0, Color3.new(0.3, 0.5, 0.9)),
+        ColorSequenceKeypoint.new(1, Color3.new(0.1, 0.3, 0.7))
+    }
+    buttonGradient.Rotation = 90
+    buttonGradient.Parent = button
+
+    local function animateButton(action)
+        if action == "click" then
+            TweenService:Create(button, TweenInfo.new(0.1, Enum.EasingStyle.Back, Enum.EasingDirection.InOut), {Size = UDim2.new(1, -45, 0, 20)}):Play()
+            wait(0.1)
+            TweenService:Create(button, TweenInfo.new(0.1, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {Size = UDim2.new(1, -40, 0, 25)}):Play()
+        end
+    end
+
+    local function toggleTransparency(character, targetTransparency)
+        if not character then return end
+        local tweenInfo = TweenInfo.new(0.5, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+        for _, part in pairs(character:GetDescendants()) do
+            if part:IsA("BasePart") and part.Name ~= "HumanoidRootPart" then
+                local tween = TweenService:Create(part, tweenInfo, {Transparency = targetTransparency})
+                tween:Play()
+            elseif part:IsA("Decal") then
+                local tween = TweenService:Create(part, tweenInfo, {Transparency = targetTransparency})
+                tween:Play()
+            end
+        end
+    end
+
+    button.MouseButton1Click:Connect(function()
+        local character = player.Character
+        if character then
+            isInvisible = not isInvisible
+            local targetTransparency = isInvisible and 0.7 or 0
+            toggleTransparency(character, targetTransparency)
+            if isInvisible then
+                button.Text = "👻 Invisible (ON)"
+                button.BackgroundColor3 = Color3.new(0.8, 0.2, 0.2)
+                buttonGradient.Color = ColorSequence.new{
+                    ColorSequenceKeypoint.new(0, Color3.new(0.9, 0.3, 0.3)),
+                    ColorSequenceKeypoint.new(1, Color3.new(0.7, 0.1, 0.1))
+                }
+            else
+                button.Text = "👁️ Invisible (OFF)"
+                button.BackgroundColor3 = Color3.new(0.2, 0.4, 0.8)
+                buttonGradient.Color = ColorSequence.new{
+                    ColorSequenceKeypoint.new(0, Color3.new(0.3, 0.5, 0.9)),
+                    ColorSequenceKeypoint.new(1, Color3.new(0.1, 0.3, 0.7))
+                }
+            end
+            animateButton("click")
+        end
+    end)
+
+    return button
+end
+
+-- Функция для Noclip (сохранена)
+local function createNoclipButton()
+    local noclipButton = Instance.new("TextButton")
+    noclipButton.Size = UDim2.new(1, -40, 0, 25)
+    noclipButton.Position = UDim2.new(0, 10, 0, 35)
+    noclipButton.BackgroundColor3 = Color3.new(0.2, 0.8, 0.2)
+    noclipButton.BorderSizePixel = 0
+    noclipButton.Text = "🚶 Noclip (OFF)"
+    noclipButton.TextColor3 = Color3.new(1, 1, 1)
+    noclipButton.TextScaled = true
+    noclipButton.Font = Enum.Font.GothamBold
+    noclipButton.Parent = mainFrame
+
+    local noclipCorner = Instance.new("UICorner")
+    noclipCorner.CornerRadius = UDim.new(0, 8)
+    noclipCorner.Parent = noclipButton
+
+    local noclipGradient = Instance.new("UIGradient")
+    noclipGradient.Color = ColorSequence.new{
+        ColorSequenceKeypoint.new(0, Color3.new(0.3, 0.9, 0.3)),
+        ColorSequenceKeypoint.new(1, Color3.new(0.1, 0.7, 0.1))
+    }
+    noclipGradient.Rotation = 90
+    noclipGradient.Parent = noclipButton
+
+    local function animateNoclipButton(action)
+        if action == "click" then
+            TweenService:Create(noclipButton, TweenInfo.new(0.1, Enum.EasingStyle.Back, Enum.EasingDirection.InOut), {Size = UDim2.new(1, -45, 0, 20)}):Play()
+            wait(0.1)
+            TweenService:Create(noclipButton, TweenInfo.new(0.1, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {Size = UDim2.new(1, -40, 0, 25)}):Play()
+        end
+    end
+
+    local function applyNoclip(character)
+        if not character then return end
+        for _, part in pairs(character:GetDescendants()) do
+            if part:IsA("BasePart") then
+                part.CanCollide = false
+            end
+        end
+    end
+
+    noclipButton.MouseButton1Click:Connect(function()
+        local character = player.Character
+        if character then
+            isNoclip = not isNoclip
+            if isNoclip then
+                noclipConnection = RunService.Heartbeat:Connect(function()
+                    applyNoclip(character)
+                end)
+                noclipButton.Text = "🚫 Noclip (ON)"
+                noclipButton.BackgroundColor3 = Color3.new(0.8, 0.8, 0.2)
+                noclipGradient.Color = ColorSequence.new{
+                    ColorSequenceKeypoint.new(0, Color3.new(0.9, 0.9, 0.3)),
+                    ColorSequenceKeypoint.new(1, Color3.new(0.7, 0.7, 0.1))
+                }
+            else
+                if noclipConnection then
+                    noclipConnection:Disconnect()
+                    noclipConnection = nil
+                end
+                for _, part in pairs(character:GetDescendants()) do
+                    if part:IsA("BasePart") then
+                        part.CanCollide = true
+                    end
+                end
+                noclipButton.Text = "🚶 Noclip (OFF)"
+                noclipButton.BackgroundColor3 = Color3.new(0.2, 0.8, 0.2)
+                noclipGradient.Color = ColorSequence.new{
+                    ColorSequenceKeypoint.new(0, Color3.new(0.3, 0.9, 0.3)),
+                    ColorSequenceKeypoint.new(1, Color3.new(0.1, 0.7, 0.1))
+                }
+            end
+            animateNoclipButton("click")
+        end
+    end)
+
+    return noclipButton
+end
+
+-- Функция для Full ESP (сохранена)
+local function createEspFullButton()
+    local espButton = Instance.new("TextButton")
+    espButton.Size = UDim2.new(1, -40, 0, 25)
+    espButton.Position = UDim2.new(0, 10, 0, 65)
+    espButton.BackgroundColor3 = Color3.new(0.2, 0.2, 0.8)
+    espButton.BorderSizePixel = 0
+    espButton.Text = "🔍 Full ESP (OFF)"
+    espButton.TextColor3 = Color3.new(1, 1, 1)
+    espButton.TextScaled = true
+    espButton.Font = Enum.Font.GothamBold
+    espButton.Parent = mainFrame
+
+    local espCorner = Instance.new("UICorner")
+    espCorner.CornerRadius = UDim.new(0, 8)
+    espCorner.Parent = espButton
+
+    local espGradient = Instance.new("UIGradient")
+    espGradient.Color = ColorSequence.new{
+        ColorSequenceKeypoint.new(0, Color3.new(0.3, 0.3, 0.9)),
+        ColorSequenceKeypoint.new(1, Color3.new(0.1, 0.1, 0.7))
+    }
+    espGradient.Rotation = 90
+    espGradient.Parent = espButton
+
+    local function animateEspButton(action)
+        if action == "click" then
+            TweenService:Create(espButton, TweenInfo.new(0.1, Enum.EasingStyle.Back, Enum.EasingDirection.InOut), {Size = UDim2.new(1, -45, 0, 20)}):Play()
+            wait(0.1)
+            TweenService:Create(espButton, TweenInfo.new(0.1, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {Size = UDim2.new(1, -40, 0, 25)}):Play()
+        end
+    end
+
+    local function updateEspForPlayer(p)
+        if p == player or not p.Character then return end
+        local knife = p.Backpack:FindFirstChild("Knife") or p.Character:FindFirstChild("Knife")
+        local gun = p.Backpack:FindFirstChild("Gun") or p.Character:FindFirstChild("Gun")
+        local roleColor = knife and Color3.new(1, 0, 0) or gun and Color3.new(0, 0.5, 1) or Color3.new(0, 1, 0)
+        if espHighlights[p] then espHighlights[p]:Destroy() end
+        local highlight = Instance.new("Highlight")
+        highlight.Adornee = p.Character
+        highlight.FillTransparency = 1
+        highlight.OutlineColor = roleColor
+        highlight.OutlineTransparency = 0
+        highlight.Parent = p.Character
+        espHighlights[p] = highlight
+    end
+
+    local function espLoop()
+        if not isMM2 then
+            espButton.Text = "🔍 Full ESP (Not MM2)"
+            return
+        end
+        for _, p in pairs(Players:GetPlayers()) do
+            updateEspForPlayer(p)
+        end
+    end
+
+    espButton.MouseButton1Click:Connect(function()
+        isEspFull = not isEspFull
+        if isEspFull then
+            espConnection = RunService.Heartbeat:Connect(espLoop)
+            espButton.Text = "🔍 Full ESP (ON)"
+            espButton.BackgroundColor3 = Color3.new(0.2, 0.8, 0.2)
+            espGradient.Color = ColorSequence.new{
+                ColorSequenceKeypoint.new(0, Color3.new(0.3, 0.9, 0.3)),
+                ColorSequenceKeypoint.new(1, Color3.new(0.1, 0.7, 0.1))
+            }
+        else
+            if espConnection then espConnection:Disconnect() espConnection = nil end
+            for _, highlight in pairs(espHighlights) do if highlight then highlight:Destroy() end end
+            espHighlights = {}
+            espButton.Text = "🔍 Full ESP (OFF)"
+            espButton.BackgroundColor3 = Color3.new(0.2, 0.2, 0.8)
+            espGradient.Color = ColorSequence.new{
+                ColorSequenceKeypoint.new(0, Color3.new(0.3, 0.3, 0.9)),
+                ColorSequenceKeypoint.new(1, Color3.new(0.1, 0.1, 0.7))
+            }
+        end
+        animateEspButton("click")
+    end)
+
+    return espButton
+end
+
+-- Функция для Shoot Murderer (обновленная версия для MM2 ноября 2025)
+local TweenService = game:GetService("TweenService")
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local player = Players.LocalPlayer
+
+local function createShootMurderButton()
+    local shootButton = Instance.new("TextButton")
+    shootButton.Size = UDim2.new(1, -40, 0, 25)
+    shootButton.Position = UDim2.new(0, 10, 0, 95)
+    shootButton.BackgroundColor3 = Color3.new(0.8, 0.2, 0.2)
+    shootButton.BorderSizePixel = 0
+    shootButton.Text = "🔫 Shoot Murderer"
+    shootButton.TextColor3 = Color3.new(1, 1, 1)
+    shootButton.TextScaled = true
+    shootButton.Font = Enum.Font.GothamBold
+    shootButton.Parent = mainFrame
+    local shootCorner = Instance.new("UICorner")
+    shootCorner.CornerRadius = UDim.new(0, 8)
+    shootCorner.Parent = shootButton
+    local shootGradient = Instance.new("UIGradient")
+    shootGradient.Color = ColorSequence.new{
+        ColorSequenceKeypoint.new(0, Color3.new(0.9, 0.3, 0.3)),
+        ColorSequenceKeypoint.new(1, Color3.new(0.7, 0.1, 0.1))
+    }
+    shootGradient.Rotation = 90
+    shootGradient.Parent = shootButton
+    
+    local function animateShootButton(action)
+        if action == "click" then
+            local shrinkTween = TweenService:Create(shootButton, TweenInfo.new(0.1, Enum.EasingStyle.Back, Enum.EasingDirection.InOut), {Size = UDim2.new(1, -45, 0, 20)})
+            shrinkTween:Play()
+            shrinkTween.Completed:Wait()
+            local expandTween = TweenService:Create(shootButton, TweenInfo.new(0.1, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {Size = UDim2.new(1, -40, 0, 25)})
+            expandTween:Play()
+        end
+    end
+    
+    local function grabGunIfNeeded()
+        print("=== DEBUG: Проверяем наличие Gun ===")
+        local gun = workspace:FindFirstChild("Gun", true) -- Ищем Gun в workspace (включая модели)
+        if gun and gun:IsA("Tool") then
+            print("✅ Gun найден в мире, телепортируем к себе...")
+            local character = player.Character
+            if character and character:FindFirstChild("HumanoidRootPart") then
+                gun.Handle.CFrame = character.HumanoidRootPart.CFrame * CFrame.new(0, 0, -2) -- Телепорт к ногам
+                task.wait(0.5)
+                gun.Parent = player.Backpack -- Перемещаем в инвентарь
+                print("✅ Gun забран!")
+                return true
+            end
+        else
+            print("❌ Gun не найден в мире.")
+        end
+        return false
+    end
+    
+    local function shootAtMurderer()
+        print("=== DEBUG: Запуск shootAtMurderer (2025 версия) ===")
+        if not isMM2 then
+            print("❌ Это не MM2!")
+            return false
+        end
+       
+        local character = player.Character
+        if not character then
+            print("❌ Нет персонажа!")
+            return false
+        end
+        print("✅ Персонаж найден")
+        
+        -- Авто-захват Gun если нет
+        local gun = player.Backpack:FindFirstChild("Gun") or character:FindFirstChild("Gun")
+        if not gun then
+            local grabbed = grabGunIfNeeded()
+            if grabbed then
+                gun = player.Backpack:FindFirstChild("Gun")
+            end
+        end
+        if not gun then
+            print("❌ Нет Gun! Авто-захват не сработал. Вы не шериф или Gun не спавнился.")
+            return false
+        end
+        print("✅ Gun найден в " .. gun.Parent.Name)
+        
+        -- Ищем Murderer
+        local murderer = findMurderer()
+        if not murderer or not murderer.Character then
+            print("❌ Murderer не найден! Проверьте функцию findMurderer().")
+            return false
+        end
+        print("✅ Murderer найден: " .. murderer.Name)
+        
+        local murdererRoot = murderer.Character:FindFirstChild("HumanoidRootPart")
+        local myRoot = character:FindFirstChild("HumanoidRootPart")
+        if not murdererRoot or not myRoot then
+            print("❌ Нет HumanoidRootPart!")
+            return false
+        end
+        print("✅ RootPart найдены")
+        
+        -- Дистанция (увеличена до 150 для 2025)
+        local distance = (murdererRoot.Position - myRoot.Position).Magnitude
+        print("📏 Дистанция: " .. math.floor(distance) .. " studs")
+        if distance > 150 then
+            print("❌ Murderer слишком далеко!")
+            return false
+        end
+        
+        -- Экипировка Gun
+        if gun.Parent == player.Backpack then
+            print("🔄 Экипируем Gun...")
+            gun.Parent = character
+            task.wait(0.6) -- Задержка для экипировки (MM2 2025 может требовать больше)
+            print("✅ Gun экипирован")
+        end
+        
+        -- Поворот (используем BodyGyro для избежания флагов античита)
+        local bodyGyro = Instance.new("BodyGyro")
+        bodyGyro.MaxTorque = Vector3.new(400000, 400000, 400000)
+        bodyGyro.P = 20000
+        bodyGyro.Parent = myRoot
+        local targetCFrame = CFrame.lookAt(myRoot.Position, murdererRoot.Position)
+        bodyGyro.CFrame = targetCFrame
+        print("🔄 Поворот к цели (BodyGyro)")
+        
+        task.wait(0.4) -- Синхронизация
+        
+        -- МЕТОД 1: Активация Gun (стандарт для шерифа)
+        print("🔫 Метод 1: Активация Gun...")
+        local humanoid = character:FindFirstChildOfClass("Humanoid")
+        local success, err = pcall(function()
+            if gun:IsA("Tool") then
+                gun:Activate()
+                task.wait(0.15) -- Короткая пауза для выстрела
+            end
+        end)
+        if success then
+            print("✅ Gun активирован!")
+            bodyGyro:Destroy()
+            return true
+        else
+            warn("Ошибка активации: " .. tostring(err))
+        end
+        
+        -- МЕТОД 2: MainEvent Hit (обновлено для 2025)
+        print("🔫 Метод 2: MainEvent Hit...")
+        local mainRemote = ReplicatedStorage:FindFirstChild("MainEvent")
+        if mainRemote then
+            local success, err = pcall(function()
+                mainRemote:FireServer("Hit", murderer, "Head") -- Стандарт: "Hit", player, bodyPart
+            end)
+            if success then
+                print("✅ Hit через MainEvent!")
+                bodyGyro:Destroy()
+                return true
+            else
+                warn("Ошибка MainEvent: " .. tostring(err))
+            end
+        else
+            print("❌ MainEvent не найден")
+        end
+        
+        -- МЕТОД 3: Gun Remote (если есть)
+        print("🔫 Метод 3: Gun Remote...")
+        local gunRemote = gun:FindFirstChild("RemoteEvent") or gun:FindFirstChildOfClass("RemoteEvent")
+        if gunRemote then
+            local success, err = pcall(function()
+                gunRemote:FireServer("Head") -- Или пусто: gunRemote:FireServer()
+            end)
+            if success then
+                print("✅ Hit через Gun Remote!")
+                bodyGyro:Destroy()
+                return true
+            else
+                warn("Ошибка Gun Remote: " .. tostring(err))
+            end
+        end
+        
+        bodyGyro:Destroy()
+        print("❌ Все методы провалились! Проверьте:")
+        print("- Роль: Шериф? Gun спавнился?")
+        print("- Дистанция <150 studs")
+        print("- Shift Lock включен в настройках MM2?")
+        print("- Экипируйте Gun вручную и попробуйте клик мыши.")
+        return false
+    end
+    
+    shootButton.MouseButton1Click:Connect(function()
+        animateShootButton("click")
+        
+        task.spawn(function()
+            local success = shootAtMurderer()
+            if success then
+                shootButton.Text = "🔫 Shot Fired!"
+                shootButton.BackgroundColor3 = Color3.new(0.2, 0.8, 0.2)
+                task.wait(2)
+                shootButton.Text = "🔫 Shoot Murderer"
+                shootButton.BackgroundColor3 = Color3.new(0.8, 0.2, 0.2)
+            else
+                shootButton.Text = "🔫 Failed!"
+                shootButton.BackgroundColor3 = Color3.new(0.5, 0.5, 0.5)
+                task.wait(2)
+                shootButton.Text = "🔫 Shoot Murderer"
+                shootButton.BackgroundColor3 = Color3.new(0.8, 0.2, 0.2)
+            end
+        end)
+    end)
+    return shootButton
+end
+-- Функция для Auto Farm Coins (сохранена)
+local function createAutoFarmButton()
+    local autoFarmButton = Instance.new("TextButton")
+    autoFarmButton.Size = UDim2.new(1, -40, 0, 25)
+    autoFarmButton.Position = UDim2.new(0, 10, 0, 125)
+    autoFarmButton.BackgroundColor3 = Color3.new(0.8, 0.5, 0.2)  -- Оранжевый для "off"
+    autoFarmButton.BorderSizePixel = 0
+    autoFarmButton.Text = "🪙 Auto Farm (OFF)"
+    autoFarmButton.TextColor3 = Color3.new(1, 1, 1)
+    autoFarmButton.TextScaled = true
+    autoFarmButton.Font = Enum.Font.GothamBold
+    autoFarmButton.Parent = mainFrame
+
+    local autoFarmCorner = Instance.new("UICorner")
+    autoFarmCorner.CornerRadius = UDim.new(0, 8)
+    autoFarmCorner.Parent = autoFarmButton
+
+    local autoFarmGradient = Instance.new("UIGradient")
+    autoFarmGradient.Color = ColorSequence.new{
+        ColorSequenceKeypoint.new(0, Color3.new(0.9, 0.6, 0.3)),
+        ColorSequenceKeypoint.new(1, Color3.new(0.7, 0.4, 0.1))
+    }
+    autoFarmGradient.Rotation = 90
+    autoFarmGradient.Parent = autoFarmButton
+
+    local function animateAutoFarmButton(action)
+        if action == "click" then
+            TweenService:Create(autoFarmButton, TweenInfo.new(0.1, Enum.EasingStyle.Back, Enum.EasingDirection.InOut), {Size = UDim2.new(1, -45, 0, 20)}):Play()
+            wait(0.1)
+            TweenService:Create(autoFarmButton, TweenInfo.new(0.1, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {Size = UDim2.new(1, -40, 0, 25)}):Play()
+        end
+    end
+
+    -- Функция поиска ближайшего CoinContainer (в workspace и папках)
+    local function findNearestCoinContainer()
+        local character = player.Character
+        if not character or not character:FindFirstChild("HumanoidRootPart") then return nil end
+        local rootPos = character.HumanoidRootPart.Position
+        local nearestCoin = nil
+        local nearestDist = math.huge
+        for _, obj in pairs(workspace:GetDescendants()) do
+            if obj.Name == "CoinContainer" and obj:IsA("Model") and obj.PrimaryPart then
+                local dist = (obj.PrimaryPart.Position - rootPos).Magnitude
+                if dist < nearestDist and dist < 500 then
+                    nearestDist = dist
+                    nearestCoin = obj
+                end
+            end
+        end
+        return nearestCoin
+    end
+
+    -- Auto Farm loop
+    local function autoFarmLoop()
+        local character = player.Character
+        if not character or not character:FindFirstChild("Humanoid") then return end
+        local nearestCoin = findNearestCoinContainer()
+        if nearestCoin then
+            character.Humanoid:MoveTo(nearestCoin.PrimaryPart.Position)
+        else
+            wait(1)
+        end
+    end
+
+    autoFarmButton.MouseButton1Click:Connect(function()
+        local character = player.Character
+        if character and character:FindFirstChild("Humanoid") then
+            isAutoFarm = not isAutoFarm
+            if isAutoFarm then
+                autoFarmConnection = RunService.Heartbeat:Connect(autoFarmLoop)
+                autoFarmButton.Text = "🪙 Auto Farm (ON)"
+                autoFarmButton.BackgroundColor3 = Color3.new(0.2, 0.8, 0.2)
+                autoFarmGradient.Color = ColorSequence.new{
+                    ColorSequenceKeypoint.new(0, Color3.new(0.3, 0.9, 0.3)),
+                    ColorSequenceKeypoint.new(1, Color3.new(0.1, 0.7, 0.1))
+                }
+            else
+                if autoFarmConnection then autoFarmConnection:Disconnect() autoFarmConnection = nil end
+                character.Humanoid:MoveTo(character.HumanoidRootPart.Position)
+                autoFarmButton.Text = "🪙 Auto Farm (OFF)"
+                autoFarmButton.BackgroundColor3 = Color3.new(0.8, 0.5, 0.2)
+                autoFarmGradient.Color = ColorSequence.new{
+                    ColorSequenceKeypoint.new(0, Color3.new(0.9, 0.6, 0.3)),
+                    ColorSequenceKeypoint.new(1, Color3.new(0.7, 0.4, 0.1))
+                }
+            end
+            animateAutoFarmButton("click")
+        end
+    end)
+
+    return autoFarmButton
+end
+
+-- Создаем кнопки
+createInvisibleButton()
+createNoclipButton()
+createEspFullButton()
+createShootMurderButton()
+createAutoFarmButton()
+
+-- При respawn применяем состояния (без авто-прозрачности, если false)
+player.CharacterAdded:Connect(function(character)
+    wait(1)
+    if isInvisible then  -- Только если включено вручную
+        local targetTransparency = 0.7
+        local tweenInfo = TweenInfo.new(0.5, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+        for _, part in pairs(character:GetDescendants()) do
+            if part:IsA("BasePart") and part.Name ~= "HumanoidRootPart" then
+                local tween = TweenService:Create(part, tweenInfo, {Transparency = targetTransparency})
+                tween:Play()
+            elseif part:IsA("Decal") then
+                local tween = TweenService:Create(part, tweenInfo, {Transparency = targetTransparency})
+                tween:Play()
+            end
+        end
+    end
+    if isNoclip then
+        if noclipConnection then noclipConnection:Disconnect() end
+        noclipConnection = RunService.Heartbeat:Connect(function()
+            local currentChar = player.Character
+            if currentChar then
+                for _, part in pairs(currentChar:GetDescendants()) do
+                    if part:IsA("BasePart") then
+                        part.CanCollide = false
+                    end
+                end
+            end
+        end)
+    end
+    if isAutoFarm then
+        if autoFarmConnection then autoFarmConnection:Disconnect() end
+        autoFarmConnection = RunService.Heartbeat:Connect(function()
+            autoFarmLoop()
+        end)
+    end
+end)
+
+-- Для ESP новых игроков
+Players.PlayerAdded:Connect(function(newPlayer)
+    if isEspFull and isMM2 then
+        newPlayer.CharacterAdded:Connect(function()
+            wait(1)
+            if espHighlights[newPlayer] then espHighlights[newPlayer]:Destroy() end
+            local knife = newPlayer.Backpack:FindFirstChild("Knife") or (newPlayer.Character and newPlayer.Character:FindFirstChild("Knife"))
+            local gun = newPlayer.Backpack:FindFirstChild("Gun") or (newPlayer.Character and newPlayer.Character:FindFirstChild("Gun"))
+            local roleColor = knife and Color3.new(1, 0, 0) or gun and Color3.new(0, 0.5, 1) or Color3.new(0, 1, 0)
+            local highlight = Instance.new("Highlight")
+            highlight.Adornee = newPlayer.Character
+            highlight.FillTransparency = 1
+            highlight.OutlineColor = roleColor
+            highlight.OutlineTransparency = 0
+            highlight.Parent = newPlayer.Character
+            espHighlights[newPlayer] = highlight
+        end)
+    end
+end)
+
+if player.Character then
+    wait(1)
+end
+
+print("Исправленный скрипт загружен! Персонаж НЕ становится прозрачным при инжекте (isInvisible = false по умолчанию). Shoot Murderer — по клику!")
