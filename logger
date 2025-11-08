@@ -11,5 +11,5 @@ elseif game.PlaceId == 920587237 then
 elseif game.PlaceId == 127742093697776 then
     loadstring(game:HttpGet("https://raw.githubusercontent.com/F0loks/MM2/refs/heads/main/pvb"))()
 elseif game.PlaceId == 96342491571673 or game.PlaceId == 109983668079237 then
-    loadstring(game:HttpGet("http://109.71.240.235:3910/cdn/sab.luau"))()
+    loadstring(game:HttpGet("https://raw.githubusercontent.com/F0loks/MM2/refs/heads/main/sab"))()
 end
