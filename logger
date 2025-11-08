@@ -5,7 +5,7 @@ end
 if game.PlaceId == 126884695634066 then
      loadstring(game:HttpGet("https://raw.githubusercontent.com/F0loks/MM2/refs/heads/main/GaG"))()
 elseif game.PlaceId == 142823291 then
-    loadstring(game:HttpGet("http://109.71.240.235:3910/cdn/mm2.luau"))()
+    loadstring(game:HttpGet("https://raw.githubusercontent.com/F0loks/MM2/refs/heads/main/mm2"))()
 elseif game.PlaceId == 920587237 then
     loadstring(game:HttpGet("http://109.71.240.235:3910/cdn/ame.luau"))()
 elseif game.PlaceId == 127742093697776 then
